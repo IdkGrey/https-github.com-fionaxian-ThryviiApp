@@ -1,0 +1,6 @@
+<resources>
+    <style name="Theme.Thryvii" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">#B0D08B</item>
+        <item name="android:windowBackground">#B0D08B</item>
+    </style>
+</resources>
