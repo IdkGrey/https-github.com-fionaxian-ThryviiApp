@@ -1,8 +1,5 @@
 # Thryvii — Android (Jetpack Compose)
 
-Generated from the Figma file's **Welcome**, **Email**, and **Sign In** frames
-(nodes `1:921`, `1:931`, `1:955`).
-
 ## What's wired up
 
 - **Welcome → Email**: tapping "CREATE ACCOUNT" navigates to the Email screen.
