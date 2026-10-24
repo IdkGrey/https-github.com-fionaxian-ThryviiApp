@@ -50,6 +50,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -58,8 +59,16 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.foundation.text.BasicTextField
@@ -2208,10 +2217,28 @@ private data class JournalEntry(
     val fullBody: String,
     val photoRes: Int? = null,
     val artRes: Int? = null,
-    val viewerReady: Boolean = true
+    val viewerReady: Boolean = true,
+    // User-drawn strokes for entries created in-app via the Drawing editor (as opposed to the
+    // seed entries above, which use a bundled `artRes` illustration instead). Null for every
+    // entry that isn't a freehand drawing made on-device.
+    val strokes: List<DrawnStroke>? = null
 )
 
-private val journalEntries = listOf(
+/**
+ * One freehand stroke on the drawing canvas: the sequence of points the finger/stylus moved
+ * through, plus the color and width it was drawn with. A list of these is enough to redraw a
+ * saved drawing entry later in the read-only viewer, the same way it looked while being drawn.
+ */
+private data class DrawnStroke(
+    val points: List<Offset>,
+    val color: Color,
+    val strokeWidthDp: Dp
+)
+
+// Mutable so that saving a new entry from the editor can actually append to this list and have
+// it show up back on the Journal screen - a plain `listOf` would just reset on every
+// recomposition. `mutableStateListOf` makes additions observable by any composable reading it.
+private val journalEntries = mutableStateListOf(
     JournalEntry(
         title = "Fox!",
         caption = "Yesterday, art",
@@ -2295,7 +2322,13 @@ private fun JournalScreen(onClose: () -> Unit) {
     if (currentEditorMode != null) {
         JournalEntryEditorScreen(
             mode = currentEditorMode,
-            onClose = { entryEditorMode = null }
+            onClose = { entryEditorMode = null },
+            onSave = { newEntry ->
+                // Newest entry goes on top (matches the seed data, which is ordered highest
+                // pageNumber first) and gets the next page number up from whatever's highest.
+                val nextPageNumber = (journalEntries.maxOfOrNull { it.pageNumber } ?: 0) + 1
+                journalEntries.add(0, newEntry.copy(pageNumber = nextPageNumber))
+            }
         )
         return
     }
@@ -2568,16 +2601,80 @@ private enum class EntryEditorMode { DRAWING, WRITING }
  * decorative buttons (VISIT, START, etc.).
  */
 @Composable
-private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit) {
-    val title = if (mode == EntryEditorMode.DRAWING) "Today's Weather!" else "Getting My Dog"
-    val prompt = if (mode == EntryEditorMode.DRAWING) {
+private fun JournalEntryEditorScreen(
+    mode: EntryEditorMode,
+    onClose: () -> Unit,
+    onSave: (JournalEntry) -> Unit
+) {
+    val defaultPrompt = if (mode == EntryEditorMode.DRAWING) {
         "Today's Prompt: Draw Today's Weather"
     } else {
         "Today's Prompt: Write about your favorite memory"
     }
     val typeLabel = if (mode == EntryEditorMode.DRAWING) "Art" else "Writing"
     val dateLabel = remember { SimpleDateFormat("M/d/yy", Locale.getDefault()).format(Date()) }
+
+    // The entry's own content - what actually gets written back into `journalEntries` when
+    // SAVE is tapped. Title is a real editable field (shared by both modes); body text only
+    // applies to Writing, and strokes only to Drawing.
+    var titleText by remember { mutableStateOf("") }
     var bodyText by remember { mutableStateOf("") }
+
+    // --- Drawing engine state -------------------------------------------------------------
+    // `strokes` is every finished pen/eraser stroke; `currentPoints` is the one still being
+    // dragged out right now (cleared into `strokes` on drag end), and `redoStack` holds
+    // strokes popped off by Undo so Redo can bring them back - cleared whenever a *new*
+    // stroke is drawn, same as any standard undo/redo history.
+    val strokes = remember { mutableStateListOf<DrawnStroke>() }
+    val redoStack = remember { mutableStateListOf<DrawnStroke>() }
+    val currentPoints = remember { mutableStateListOf<Offset>() }
+    var currentColor by remember { mutableStateOf(Color.Black) }
+    var isEraser by remember { mutableStateOf(false) }
+    var showColorPicker by remember { mutableStateOf(false) }
+    val pencilWidth = 4.dp
+    val eraserWidth = 20.dp
+    val drawingColors = remember {
+        listOf(
+            Color.Black,
+            Color(0xFFE53935),
+            Color(0xFFFF8A00),
+            Color(0xFFFFD600),
+            Color(0xFF43A047),
+            Color(0xFF1E88E5),
+            Color(0xFF8E24AA),
+            Color(0xFF6D4C41)
+        )
+    }
+
+    fun saveAndClose() {
+        val trimmedTitle = titleText.trim()
+        val newEntry = JournalEntry(
+            title = trimmedTitle.ifEmpty { "Untitled Entry" },
+            caption = "Today, ${if (mode == EntryEditorMode.DRAWING) "art" else "writing"}",
+            // pageNumber is a placeholder here - JournalScreen's onSave overwrites it with the
+            // real next page number once it knows where this entry lands in the full list.
+            pageNumber = 0,
+            preview = if (mode == EntryEditorMode.WRITING) {
+                val trimmedBody = bodyText.trim()
+                if (trimmedBody.isEmpty()) {
+                    null
+                } else if (trimmedBody.length > 24) {
+                    trimmedBody.take(24) + "..."
+                } else {
+                    trimmedBody
+                }
+            } else {
+                null
+            },
+            type = mode,
+            date = dateLabel,
+            prompt = defaultPrompt,
+            fullBody = bodyText,
+            strokes = if (mode == EntryEditorMode.DRAWING) strokes.toList() else null
+        )
+        onSave(newEntry)
+        onClose()
+    }
 
     Box(
         modifier = Modifier
@@ -2611,9 +2708,8 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
 
                 Spacer(modifier = Modifier.height(10.dp))
 
-                // Trash (discard) and Save both just return to the entry list for now - there's
-                // no persistence layer yet to actually write the entry anywhere. Sits in its
-                // own row below the title pill, not beside it.
+                // Trash discards without saving; Save actually appends the entry to
+                // `journalEntries` (via onSave) and returns to the journal list.
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -2633,7 +2729,7 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
                             .clip(RoundedCornerShape(10.dp))
                             .background(ButtonRed)
                             .border(2.dp, Color.Black, RoundedCornerShape(10.dp))
-                            .clickable(onClick = onClose)
+                            .clickable { saveAndClose() }
                             .padding(horizontal = 16.dp, vertical = 8.dp)
                     ) {
                         Text(
@@ -2666,17 +2762,35 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
 
                         Spacer(modifier = Modifier.height(20.dp))
 
-                        Text(
-                            text = title,
-                            fontFamily = JuaFontFamily,
-                            fontSize = 20.sp,
-                            color = TextBlack,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                        // Editable title - tap in and type your own, same spot the static
+                        // sample title used to sit.
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            if (titleText.isEmpty()) {
+                                Text(
+                                    text = "Entry Title",
+                                    fontFamily = JuaFontFamily,
+                                    fontSize = 20.sp,
+                                    color = PriceBorderGray,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            BasicTextField(
+                                value = titleText,
+                                onValueChange = { titleText = it },
+                                textStyle = TextStyle(
+                                    fontFamily = JuaFontFamily,
+                                    fontSize = 20.sp,
+                                    color = TextBlack,
+                                    textAlign = TextAlign.Center
+                                ),
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth()
+                            )
+                        }
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = prompt,
+                            text = defaultPrompt,
                             fontFamily = JuaFontFamily,
                             fontSize = 15.sp,
                             color = PriceBorderGray,
@@ -2712,12 +2826,42 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
                                 )
                             }
                         } else {
-                            // No drawing engine yet - a blank canvas placeholder, matching the
-                            // CSS which likewise has no drawn content in this area.
-                            Spacer(
+                            // Real freehand drawing canvas: drag with a finger/mouse to draw,
+                            // using whichever color + pencil/eraser mode is selected below.
+                            DrawingCanvas(
+                                strokes = strokes,
+                                liveStroke = if (currentPoints.size > 1) {
+                                    DrawnStroke(
+                                        points = currentPoints.toList(),
+                                        color = if (isEraser) Color.White else currentColor,
+                                        strokeWidthDp = if (isEraser) eraserWidth else pencilWidth
+                                    )
+                                } else {
+                                    null
+                                },
+                                onDragStart = { offset ->
+                                    currentPoints.clear()
+                                    currentPoints.add(offset)
+                                },
+                                onDrag = { offset -> currentPoints.add(offset) },
+                                onDragEnd = {
+                                    if (currentPoints.size > 1) {
+                                        strokes.add(
+                                            DrawnStroke(
+                                                points = currentPoints.toList(),
+                                                color = if (isEraser) Color.White else currentColor,
+                                                strokeWidthDp = if (isEraser) eraserWidth else pencilWidth
+                                            )
+                                        )
+                                        redoStack.clear()
+                                    }
+                                    currentPoints.clear()
+                                },
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, PriceBorderGray, RoundedCornerShape(8.dp))
                             )
                         }
                     }
@@ -2735,14 +2879,22 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         if (mode == EntryEditorMode.DRAWING) {
-                            EditorTool(label = "Pencil") {
+                            EditorTool(
+                                label = "Pencil",
+                                selected = !isEraser,
+                                onClick = { isEraser = false; showColorPicker = false }
+                            ) {
                                 Image(
                                     painter = painterResource(R.drawable.icon_edit),
                                     contentDescription = null,
                                     modifier = Modifier.size(24.dp)
                                 )
                             }
-                            EditorTool(label = "Eraser") {
+                            EditorTool(
+                                label = "Eraser",
+                                selected = isEraser,
+                                onClick = { isEraser = true; showColorPicker = false }
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(22.dp)
@@ -2751,18 +2903,31 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
                                         .border(1.dp, Color.Black, RoundedCornerShape(4.dp))
                                 )
                             }
-                            EditorTool(label = "Color") {
+                            EditorTool(
+                                label = "Color",
+                                selected = showColorPicker,
+                                onClick = { showColorPicker = !showColorPicker }
+                            ) {
                                 Box(
                                     modifier = Modifier
                                         .size(22.dp)
                                         .clip(CircleShape)
-                                        .background(Color(0xFF6EBAED))
+                                        .background(currentColor)
+                                        .border(1.dp, Color.Black, CircleShape)
                                 )
                             }
-                            EditorTool {
+                            EditorTool(onClick = {
+                                if (strokes.isNotEmpty()) {
+                                    redoStack.add(strokes.removeAt(strokes.lastIndex))
+                                }
+                            }) {
                                 Text(text = "UNDO", fontFamily = JuaFontFamily, fontSize = 15.sp, color = TextBlack)
                             }
-                            EditorTool {
+                            EditorTool(onClick = {
+                                if (redoStack.isNotEmpty()) {
+                                    strokes.add(redoStack.removeAt(redoStack.lastIndex))
+                                }
+                            }) {
                                 Text(text = "REDO", fontFamily = JuaFontFamily, fontSize = 15.sp, color = TextBlack)
                             }
                         } else {
@@ -2783,17 +2948,129 @@ private fun JournalEntryEditorScreen(mode: EntryEditorMode, onClose: () -> Unit)
                             }
                         }
                     }
+
+                    // Color picker popup - a row of swatches that floats just above the
+                    // toolbar pill when "Color" is tapped. Picking one switches out of eraser
+                    // mode too, since picking a color always means you want to draw with it.
+                    if (mode == EntryEditorMode.DRAWING && showColorPicker) {
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 86.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(CardCream)
+                                .border(2.dp, Color.Black, RoundedCornerShape(10.dp))
+                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            drawingColors.forEach { swatch ->
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .clip(CircleShape)
+                                        .background(swatch)
+                                        .border(
+                                            width = if (!isEraser && swatch == currentColor) 3.dp else 1.dp,
+                                            color = Color.Black,
+                                            shape = CircleShape
+                                        )
+                                        .clickable {
+                                            currentColor = swatch
+                                            isEraser = false
+                                            showColorPicker = false
+                                        }
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 }
 
+/**
+ * Freehand drawing surface for the Drawing editor: renders every finished stroke plus the one
+ * currently being dragged out, and reports drag start/move/end back up so the caller owns all
+ * the actual stroke state (what color, pencil vs eraser, undo/redo). Kept dumb on purpose so
+ * the same rendering logic can be reused read-only in the entry viewer.
+ */
+@Composable
+private fun DrawingCanvas(
+    strokes: List<DrawnStroke>,
+    liveStroke: DrawnStroke?,
+    onDragStart: (Offset) -> Unit,
+    onDrag: (Offset) -> Unit,
+    onDragEnd: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Canvas(
+        modifier = modifier
+            .background(Color.White)
+            .pointerInput(Unit) {
+                detectDragGestures(
+                    onDragStart = { offset -> onDragStart(offset) },
+                    onDragEnd = { onDragEnd() },
+                    onDragCancel = { onDragEnd() },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        onDrag(change.position)
+                    }
+                )
+            }
+    ) {
+        strokes.forEach { drawStroke(it) }
+        liveStroke?.let { drawStroke(it) }
+    }
+}
+
+/** Paints one [DrawnStroke] as a rounded freehand path (or a dot, for a single tap). */
+private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawStroke(stroke: DrawnStroke) {
+    if (stroke.points.isEmpty()) return
+    if (stroke.points.size == 1) {
+        drawCircle(
+            color = stroke.color,
+            radius = stroke.strokeWidthDp.toPx() / 2f,
+            center = stroke.points.first()
+        )
+        return
+    }
+    val path = Path().apply {
+        moveTo(stroke.points.first().x, stroke.points.first().y)
+        stroke.points.drop(1).forEach { point -> lineTo(point.x, point.y) }
+    }
+    drawPath(
+        path = path,
+        color = stroke.color,
+        style = Stroke(
+            width = stroke.strokeWidthDp.toPx(),
+            cap = StrokeCap.Round,
+            join = StrokeJoin.Round
+        )
+    )
+}
+
 /** One bottom-toolbar tool: an icon slot on top, with an optional label underneath. */
 @Composable
-private fun EditorTool(label: String? = null, icon: @Composable () -> Unit) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        icon()
+private fun EditorTool(
+    label: String? = null,
+    selected: Boolean = false,
+    onClick: (() -> Unit)? = null,
+    icon: @Composable () -> Unit
+) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier
+    ) {
+        Box(
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .background(if (selected) SelectedPeach else Color.Transparent)
+                .padding(4.dp)
+        ) {
+            icon()
+        }
         if (label != null) {
             Spacer(modifier = Modifier.height(4.dp))
             Text(text = label, fontFamily = JuaFontFamily, fontSize = 15.sp, color = TextBlack)
@@ -2954,6 +3231,18 @@ private fun JournalEntryViewerScreen(
                                     .fillMaxWidth()
                                     .weight(1f)
                             )
+                        } else if (!entry.strokes.isNullOrEmpty()) {
+                            // A drawing made in-app - replay its saved strokes read-only,
+                            // same rendering DrawingCanvas uses while actually drawing it.
+                            Canvas(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .weight(1f)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .border(1.dp, PriceBorderGray, RoundedCornerShape(8.dp))
+                            ) {
+                                entry.strokes.forEach { drawStroke(it) }
+                            }
                         } else {
                             // No drawing engine or exported art asset for this entry yet - a
                             // blank canvas placeholder stands in for the CSS's illustration.
