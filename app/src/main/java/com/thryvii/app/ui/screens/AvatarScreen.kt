@@ -75,11 +75,13 @@ private val swatchColors = listOf(
  */
 @Composable
 fun AvatarScreen(
-    onCheckmarkClick: () -> Unit = {}
+    initialHairstyleIndex: Int = 2,
+    initialColorIndex: Int = 1,
+    onCheckmarkClick: (hairstyleIndex: Int, colorIndex: Int) -> Unit = { _, _ -> }
 ) {
     var selectedCategory by remember { mutableStateOf(categories[0].label) }
-    var selectedColorIndex by remember { mutableStateOf(1) }
-    var selectedOptionIndex by remember { mutableStateOf(2) }
+    var selectedColorIndex by remember { mutableStateOf(initialColorIndex) }
+    var selectedOptionIndex by remember { mutableStateOf(initialHairstyleIndex) }
 
     Row(
         modifier = Modifier
@@ -130,7 +132,7 @@ fun AvatarScreen(
                         fontWeight = FontWeight.Bold,
                         fontSize = 28.sp,
                         color = TextBlack,
-                        modifier = Modifier.clickable(onClick = onCheckmarkClick)
+                        modifier = Modifier.clickable { onCheckmarkClick(selectedOptionIndex, selectedColorIndex) }
                     )
                 }
 

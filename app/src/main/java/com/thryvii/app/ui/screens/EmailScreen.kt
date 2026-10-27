@@ -37,7 +37,7 @@ import com.thryvii.app.ui.theme.CardCream
  */
 @Composable
 fun EmailScreen(
-    onContinueClick: () -> Unit = {}
+    onContinueClick: (email: String) -> Unit = {}
 ) {
     var email by remember { mutableStateOf("") }
 
@@ -82,7 +82,7 @@ fun EmailScreen(
                 Spacer(modifier = Modifier.height(32.dp))
                 PrimaryActionButton(
                     text = "CONTINUE",
-                    onClick = onContinueClick
+                    onClick = { onContinueClick(email) }
                 )
             }
         }

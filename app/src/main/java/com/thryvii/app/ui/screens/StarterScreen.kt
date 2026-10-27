@@ -53,7 +53,7 @@ private val seeds = listOf(
  */
 @Composable
 fun StarterScreen(
-    onCheckmarkClick: () -> Unit = {}
+    onCheckmarkClick: (seed: String) -> Unit = {}
 ) {
     var selectedSeed by remember { mutableStateOf(seeds[0].label) }
 
@@ -86,7 +86,7 @@ fun StarterScreen(
                 fontWeight = FontWeight.Bold,
                 fontSize = 32.sp,
                 color = TextBlack,
-                modifier = Modifier.clickable(onClick = onCheckmarkClick)
+                modifier = Modifier.clickable { onCheckmarkClick(selectedSeed) }
             )
         }
 
