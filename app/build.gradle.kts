@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlin.plugin.serialization")
 }
 
 android {
@@ -60,6 +61,13 @@ dependencies {
 
     // Navigation between Welcome / Email / Sign In screens
     implementation("androidx.navigation:navigation-compose:2.7.7")
+
+    // ViewModels for Compose screens (viewModel(...) helper)
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.4")
+
+    // Saves the app's data to a JSON file so it survives restarts
+    implementation("androidx.datastore:datastore:1.1.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 }

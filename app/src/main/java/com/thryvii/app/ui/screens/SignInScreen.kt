@@ -43,7 +43,7 @@ import com.thryvii.app.ui.theme.TextBlack
  */
 @Composable
 fun SignInScreen(
-    onLoginClick: () -> Unit = {}
+    onLoginClick: (usernameOrEmail: String) -> Unit = {}
 ) {
     var usernameOrEmail by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -113,7 +113,7 @@ fun SignInScreen(
                 Spacer(modifier = Modifier.height(20.dp))
                 PrimaryActionButton(
                     text = "LOG IN",
-                    onClick = onLoginClick
+                    onClick = { onLoginClick(usernameOrEmail) }
                 )
             }
         }

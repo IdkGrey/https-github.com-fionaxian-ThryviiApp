@@ -44,7 +44,7 @@ import com.thryvii.app.ui.theme.TextBlack
  */
 @Composable
 fun MakeGardenScreen(
-    onStartGardenClick: () -> Unit = {}
+    onStartGardenClick: (gardenName: String, username: String, trackLocation: Boolean) -> Unit = { _, _, _ -> }
 ) {
     var gardenName by remember { mutableStateOf("My Sprout Land") }
     var username by remember { mutableStateOf("Sunny_Sprout") }
@@ -120,7 +120,7 @@ fun MakeGardenScreen(
                 Spacer(modifier = Modifier.height(20.dp))
                 PrimaryActionButton(
                     text = "START MY GARDEN!",
-                    onClick = onStartGardenClick
+                    onClick = { onStartGardenClick(gardenName, username, trackLocation) }
                 )
             }
         }

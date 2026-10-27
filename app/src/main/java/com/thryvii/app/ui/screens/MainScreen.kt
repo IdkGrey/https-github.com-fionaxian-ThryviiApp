@@ -114,6 +114,22 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.itemsIndexed
 import kotlinx.coroutines.delay
+import androidx.compose.material.icons.outlined.ExitToApp
+import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.viewmodel.compose.viewModel
+import com.thryvii.app.data.Catalog
+import com.thryvii.app.data.model.CatalogItem
+import com.thryvii.app.data.model.Profile
+import com.thryvii.app.data.model.Quest
+import com.thryvii.app.data.model.QuestGroup
+import com.thryvii.app.data.model.QuestStatus
+import com.thryvii.app.data.state.SeedData
+import com.thryvii.app.ui.drawableFor
+import com.thryvii.app.ui.viewmodel.GardenViewModel
+import com.thryvii.app.ui.viewmodel.JournalViewModel
+import com.thryvii.app.ui.viewmodel.QuestsViewModel
+import com.thryvii.app.ui.viewmodel.ShopViewModel
+import com.thryvii.app.ui.viewmodel.rememberViewModelFactory
 
 /**
  * Main / home screen (Figma nodes 1:1082 "Main" and 1:1260 "Edit" - the two share the exact
@@ -132,8 +148,27 @@ import kotlinx.coroutines.delay
  * the exact position may need a nudge once you've tried it on-device.
  */
 @Composable
-fun MainScreen(onAvatarClick: () -> Unit = {}) {
+fun MainScreen(
+    profile: Profile? = null,
+    onAvatarClick: () -> Unit = {},
+    onLogoutClick: () -> Unit = {}
+) {
     val density = LocalDensity.current
+
+    // Data comes from the repositories through ViewModels instead of being hard-coded here.
+    val viewModelFactory = rememberViewModelFactory()
+    val shopViewModel: ShopViewModel = viewModel(factory = viewModelFactory)
+    val gardenViewModel: GardenViewModel = viewModel(factory = viewModelFactory)
+    val journalViewModel: JournalViewModel = viewModel(factory = viewModelFactory)
+    val questsViewModel: QuestsViewModel = viewModel(factory = viewModelFactory)
+    val coins by shopViewModel.coins.collectAsState()
+    val shopMessage by shopViewModel.message.collectAsState()
+    val ownedPlants by gardenViewModel.ownedPlants.collectAsState()
+    val ownedDecorations by gardenViewModel.ownedDecorations.collectAsState()
+    val journalData by journalViewModel.entries.collectAsState()
+    val journalEntries = remember(journalData) { journalData.map { it.toUi() } }
+    val quests by questsViewModel.quests.collectAsState()
+    val username = profile?.username?.takeIf { it.isNotBlank() } ?: "Sunny_Sprout"
     var isEditMode by remember { mutableStateOf(false) }
     var isWateringCanSelected by remember { mutableStateOf(false) }
     var showQuoteDialog by remember { mutableStateOf(false) }
@@ -266,7 +301,12 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
                         .clickable { showSettingsPanel = true }
                 )
                 Spacer(modifier = Modifier.width(8.dp))
-                Text(text = "My Sprout Land", fontFamily = JuaFontFamily, fontSize = 16.sp, color = TextBlack)
+                Text(
+                    text = profile?.gardenName?.takeIf { it.isNotBlank() } ?: "My Sprout Land",
+                    fontFamily = JuaFontFamily,
+                    fontSize = 16.sp,
+                    color = TextBlack
+                )
             }
 
             Box {
@@ -298,14 +338,15 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
         }
 
         // Top-right currency badge
-        Image(
-            painter = painterResource(R.drawable.icon_coin_badge),
-            contentDescription = "10 coins",
+        PriceTag(
+            price = coins,
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(20.dp)
-                .height(52.dp),
-            contentScale = ContentScale.FillHeight
+                .padding(20.dp),
+            coinSize = 30.dp,
+            fontSize = 22.sp,
+            horizontalPadding = 14.dp,
+            verticalPadding = 8.dp
         )
 
         // Right side rail: Weather/Journal/Quote normally, Decorate/Plant while editing,
@@ -347,7 +388,10 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
                             SquareIconCard(
                                 iconRes = R.drawable.icon_quote,
                                 label = "Quote",
-                                onClick = { showQuoteDialog = true }
+                                onClick = {
+                                    showQuoteDialog = true
+                                    questsViewModel.complete(SeedData.QUEST_DAILY_QUOTE)
+                                }
                             )
                         }
                     }
@@ -445,10 +489,15 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
             exit = slideOutHorizontally(animationSpec = tween(300), targetOffsetX = { -it })
         ) {
             SettingsPanel(
+                username = username,
                 onDismiss = { showSettingsPanel = false },
                 onAvatarClick = {
                     showSettingsPanel = false
                     onAvatarClick()
+                },
+                onLogoutClick = {
+                    showSettingsPanel = false
+                    onLogoutClick()
                 }
             )
         }
@@ -457,7 +506,13 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
         // screen (not a scrim dialog like the ones above) since the real design is its own
         // full page with a green header/tab bar and a peach content area.
         if (showShopScreen) {
-            ShopScreen(onClose = { showShopScreen = false })
+            ShopScreen(
+                coins = coins,
+                message = shopMessage,
+                onBuy = shopViewModel::buy,
+                onDismissMessage = shopViewModel::dismissMessage,
+                onClose = { showShopScreen = false }
+            )
         }
 
         // "Notifications" screen - matches the real Figma "Notifications" frame. Full-screen
@@ -492,7 +547,11 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
         // two-column pattern as Notifications/Visit Gardens: "Weather Special Quests"
         // (fixed) and "Daily Quests" (scrollable) side by side, divided by a vertical line.
         if (showQuestsScreen) {
-            QuestsScreen(onClose = { showQuestsScreen = false })
+            QuestsScreen(
+                weatherQuests = quests.filter { it.group == QuestGroup.WEATHER },
+                dailyQuests = quests.filter { it.group == QuestGroup.DAILY },
+                onClose = { showQuestsScreen = false }
+            )
         }
 
         // "Journal" screen - matches the real Figma "Journal" frame. Unlike the other full
@@ -500,16 +559,29 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
         // coordinates map directly: a peach page background, a centered "MY JOURNAL" title
         // pill, a fixed stack of recent-entry cards, and a floating "CREATE NEW" button.
         if (showJournalScreen) {
-            JournalScreen(onClose = { showJournalScreen = false })
+            JournalScreen(
+                entries = journalEntries,
+                onSave = { entry ->
+                    journalViewModel.save(entry.toData())
+                    // Writing in the journal completes the matching quests.
+                    questsViewModel.complete(SeedData.QUEST_DAILY_JOURNAL)
+                    questsViewModel.complete(
+                        if (entry.type == EntryEditorMode.DRAWING) SeedData.QUEST_WEATHER_DRAW
+                        else SeedData.QUEST_WEATHER_MEMORY
+                    )
+                },
+                onClose = { showJournalScreen = false }
+            )
         }
 
         // "Add Decoration" screen - matches the real Figma "Add Decoration" frame.
         if (showAddDecorationScreen) {
             AddItemScreen(
                 title = "Select Decoration to Add:",
-                items = decorationOptions,
+                items = ownedDecorations.map { AddItemOption(it.item.key, drawableFor(it.item.key), it.item.label, it.owned) },
                 confirmLabel = "ADD DECORATION",
                 badgeBorderColor = NoteBrown,
+                onConfirm = { option -> gardenViewModel.place(option.key) },
                 onClose = { showAddDecorationScreen = false }
             )
         }
@@ -518,9 +590,10 @@ fun MainScreen(onAvatarClick: () -> Unit = {}) {
         if (showAddPlantScreen) {
             AddItemScreen(
                 title = "Select Plant to Add:",
-                items = plantOptions,
+                items = ownedPlants.map { AddItemOption(it.item.key, drawableFor(it.item.key), it.item.label, it.owned) },
                 confirmLabel = "ADD PLANT",
                 badgeBorderColor = PriceBorderGray,
+                onConfirm = { option -> gardenViewModel.place(option.key) },
                 onClose = { showAddPlantScreen = false }
             )
         }
@@ -739,7 +812,12 @@ private fun SaveQuoteDialog(onDismiss: () -> Unit) {
  * sibling AnimatedVisibility blocks at the call site - this composable is just the panel itself.
  */
 @Composable
-private fun SettingsPanel(onDismiss: () -> Unit, onAvatarClick: () -> Unit) {
+private fun SettingsPanel(
+    username: String,
+    onDismiss: () -> Unit,
+    onAvatarClick: () -> Unit,
+    onLogoutClick: () -> Unit
+) {
         Box(
             modifier = Modifier
                 .fillMaxHeight()
@@ -783,14 +861,14 @@ private fun SettingsPanel(onDismiss: () -> Unit, onAvatarClick: () -> Unit) {
                     ) {
                         Image(
                             painter = painterResource(R.drawable.avatar_sprout),
-                            contentDescription = "Sunny_Sprout",
+                            contentDescription = username,
                             modifier = Modifier.size(60.dp).clip(CircleShape),
                             contentScale = ContentScale.Crop
                         )
                     }
                     Spacer(modifier = Modifier.width(16.dp))
                     Column {
-                        Text(text = "Sunny_Sprout", fontFamily = JuaFontFamily, fontSize = 20.sp, color = TextBlack)
+                        Text(text = username, fontFamily = JuaFontFamily, fontSize = 20.sp, color = TextBlack)
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(text = "Seattle, WA", fontFamily = JuaFontFamily, fontSize = 15.sp, color = NoteBrown)
                     }
@@ -805,6 +883,8 @@ private fun SettingsPanel(onDismiss: () -> Unit, onAvatarClick: () -> Unit) {
                 SettingsRow(icon = Icons.Outlined.Settings, label = "Settings", onClick = {})
                 Spacer(modifier = Modifier.height(12.dp))
                 SettingsRow(icon = Icons.Outlined.Help, label = "Help Center", onClick = {})
+                Spacer(modifier = Modifier.height(12.dp))
+                SettingsRow(icon = Icons.Outlined.ExitToApp, label = "Log out", onClick = onLogoutClick)
             }
         }
 }
@@ -863,7 +943,21 @@ private enum class ShopTab(val label: String) {
  * area) rather than a small centered card, so it's rendered as an opaque full-screen overlay.
  */
 @Composable
-private fun ShopScreen(onClose: () -> Unit) {
+private fun ShopScreen(
+    coins: Int,
+    message: String?,
+    onBuy: (catalogKey: String) -> Unit,
+    onDismissMessage: () -> Unit,
+    onClose: () -> Unit
+) {
+    // The purchase result ("You got Rose! ...", "Not enough coins yet") clears itself.
+    LaunchedEffect(message) {
+        if (message != null) {
+            delay(2200)
+            onDismissMessage()
+        }
+    }
+
     var selectedTab by remember { mutableStateOf(ShopTab.MYSTERY_BAGS) }
 
     // No safe-drawing inset anywhere in this screen - the green header, red tabs, and peach
@@ -877,11 +971,13 @@ private fun ShopScreen(onClose: () -> Unit) {
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 18.dp)
         ) {
-            Image(
-                painter = painterResource(R.drawable.icon_coin_badge),
-                contentDescription = "10 coins",
-                modifier = Modifier.align(Alignment.CenterStart).height(40.dp),
-                contentScale = ContentScale.FillHeight
+            PriceTag(
+                price = coins,
+                modifier = Modifier.align(Alignment.CenterStart),
+                coinSize = 26.dp,
+                fontSize = 20.sp,
+                horizontalPadding = 12.dp,
+                verticalPadding = 6.dp
             )
             Text(
                 text = "SHOP",
@@ -952,15 +1048,16 @@ private fun ShopScreen(onClose: () -> Unit) {
                             .fillMaxSize()
                             .padding(16.dp)
                     ) {
-                        items(mysteryBagShopItems) { (iconRes, label) ->
+                        items(Catalog.bags) { bag ->
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
                                 contentAlignment = Alignment.Center
                             ) {
                                 MysteryBagCard(
-                                    iconRes = iconRes,
-                                    label = label,
-                                    price = 10,
+                                    iconRes = drawableFor(bag.key),
+                                    label = bag.label,
+                                    price = bag.price,
+                                    onClick = { onBuy(bag.key) },
                                     cardWidth = 106.dp,
                                     cardHeight = 140.dp,
                                     cardPadding = 8.dp,
@@ -999,15 +1096,16 @@ private fun ShopScreen(onClose: () -> Unit) {
                             .fillMaxSize()
                             .padding(16.dp)
                     ) {
-                        items(plantShopItems) { (iconRes, label) ->
+                        items(Catalog.plants) { plant ->
                             Box(
                                 modifier = Modifier.fillMaxWidth(),
                                 contentAlignment = Alignment.Center
                             ) {
                                 MysteryBagCard(
-                                    iconRes = iconRes,
-                                    label = label,
-                                    price = 10,
+                                    iconRes = drawableFor(plant.key),
+                                    label = plant.label,
+                                    price = plant.price,
+                                    onClick = { onBuy(plant.key) },
                                     cardWidth = 106.dp,
                                     cardHeight = 140.dp,
                                     cardPadding = 8.dp,
@@ -1047,11 +1145,11 @@ private fun ShopScreen(onClose: () -> Unit) {
                                 contentAlignment = Alignment.Center
                             ) {
                                 if (item != null) {
-                                    val (iconRes, label) = item
                                     MysteryBagCard(
-                                        iconRes = iconRes,
-                                        label = label,
-                                        price = 10,
+                                        iconRes = drawableFor(item.key),
+                                        label = item.label,
+                                        price = item.price,
+                                        onClick = { onBuy(item.key) },
                                         cardWidth = 106.dp,
                                         cardHeight = 140.dp,
                                         cardPadding = 8.dp,
@@ -1084,6 +1182,19 @@ private fun ShopScreen(onClose: () -> Unit) {
             }
         }
     }
+        if (message != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = 20.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(CardCream)
+                    .border(1.dp, NoteBrown, RoundedCornerShape(50))
+                    .padding(horizontal = 20.dp, vertical = 10.dp)
+            ) {
+                Text(text = message, fontFamily = JuaFontFamily, fontSize = 16.sp, color = TextBlack)
+            }
+        }
     }
 }
 
@@ -1111,7 +1222,8 @@ private fun MysteryBagCard(
     priceVerticalPadding: Dp = 4.dp,
     priceSpacing: Dp = 6.dp,
     priceBorderColor: Color = NoteBrown,
-    priceTextColor: Color = TextBlack
+    priceTextColor: Color = TextBlack,
+    onClick: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -1120,6 +1232,7 @@ private fun MysteryBagCard(
             .clip(RoundedCornerShape(12.dp))
             .background(CardCream)
             .border(1.dp, cardBorderColor, RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
             .padding(cardPadding),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -1202,68 +1315,12 @@ private fun PriceTag(
  * artwork hasn't been provided yet - only 16 of the 21 plant images have arrived so far, so the
  * last 5 render as empty placeholder cards until the rest come in.
  */
-private val mysteryBagShopItems: List<Pair<Int, String>> = listOf(
-    R.drawable.bag_flower to "Flower Bag",
-    R.drawable.bag_vegetable to "Vegetable Bag",
-    R.drawable.bag_fruit to "Fruit Bag",
-    R.drawable.bag_decoration to "Decoration Bag"
-)
-
-private val plantShopItems: List<Pair<Int, String>> = listOf(
-    // Row 1: Sunflower, Tulip, Lavender, Rose, Marigold, Hibiscus, Daisy
-    R.drawable.plant_sunflower to "Sunflower",
-    R.drawable.plant_tulip to "Tulip",
-    R.drawable.plant_lavender to "Lavender",
-    R.drawable.plant_rose to "Rose",
-    R.drawable.plant_marigold to "Marigold",
-    R.drawable.plant_hibiscus to "Hibiscus",
-    R.drawable.plant_daisy to "Daisy",
-    // Row 2: Pumpkin, Tomato, Apple, Strawberry, Watermelon, Orange, Banana
-    R.drawable.plant_pumpkin to "Pumpkin",
-    R.drawable.plant_tomato to "Tomato",
-    R.drawable.plant_apple to "Apple",
-    R.drawable.plant_strawberry to "Strawberry",
-    R.drawable.plant_watermelon to "Watermelon",
-    R.drawable.plant_orange to "Orange",
-    R.drawable.plant_banana to "Banana",
-    // Row 3: Corn, Broccoli, Lettuce, Mushroom, Carrot, Blueberry, Grape
-    R.drawable.plant_corn to "Corn",
-    R.drawable.plant_broccoli to "Broccoli",
-    R.drawable.plant_lettuce to "Lettuce",
-    R.drawable.plant_mushroom to "Mushroom",
-    R.drawable.plant_carrot to "Carrot",
-    R.drawable.plant_blueberry to "Blueberry",
-    R.drawable.plant_grape to "Grape"
-)
-
 /**
  * The Decorations shop's 21 grid slots (same 7x3 layout as Plants), matching the real
  * "Shop Decorations" Figma frame. Only 17 of the 21 items have arrived so far - the last
  * row's final 4 columns are still `null` placeholders until that artwork comes in.
  */
-private val decorationShopItems: List<Pair<Int, String>?> = listOf(
-    // Row 1: Fence, Scarecrow, Fountain, Rose Arch, Watering Can, Square Pot, Shovel
-    R.drawable.decor_fence to "Fence",
-    R.drawable.decor_scarecrow to "Scarecrow",
-    R.drawable.decor_fountain to "Fountain",
-    R.drawable.decor_rose_arch to "Rose Arch",
-    R.drawable.decor_watering_can to "Watering Can",
-    R.drawable.decor_square_pot to "Square Pot",
-    R.drawable.decor_shovel to "Shovel",
-    // Row 2: Bench, Rocks, Paved Path, Round Pot, Gnome, Stone Path, Bird Bath
-    R.drawable.decor_bench to "Bench",
-    R.drawable.decor_rocks to "Rocks",
-    R.drawable.decor_paved_path to "Paved Path",
-    R.drawable.decor_round_pot to "Round Pot",
-    R.drawable.decor_gnome to "Gnome",
-    R.drawable.decor_stone_path to "Stone Path",
-    R.drawable.decor_bird_bath to "Bird Bath",
-    // Row 3: Wishing Well, Light, Picnic Table, then 4 not-yet-provided slots
-    R.drawable.decor_wishing_well to "Wishing Well",
-    R.drawable.decor_light to "Light",
-    R.drawable.decor_picnic_table to "Picnic Table",
-    null, null, null, null
-)
+private val decorationShopItems: List<CatalogItem?> = Catalog.decorations + List(4) { null }
 
 /**
  * One entry in a notification list: the sender/action text plus which icon to show, plus the
@@ -1586,33 +1643,6 @@ private fun GardenCard(item: VisitGardenItem, onVisit: (VisitGardenItem) -> Unit
     }
 }
 
-/** A quest's completion state - drives its card's background/border and its status control. */
-private enum class QuestStatus { NOT_STARTED, IN_PROGRESS, COMPLETED }
-
-/**
- * One quest entry: icon, task description, optional progress line (e.g. "38%"), and status -
- * matches the real Figma "Quests" card layout.
- */
-private data class QuestItem(
-    val iconRes: Int,
-    val text: String,
-    val status: QuestStatus,
-    val progressText: String? = null
-)
-
-private val weatherSpecialQuests = listOf(
-    QuestItem(R.drawable.icon_weather, "Draw the weather in your journal", QuestStatus.NOT_STARTED),
-    QuestItem(R.drawable.quest_book, "Journal your favorite memory", QuestStatus.NOT_STARTED)
-)
-
-private val dailyQuests = listOf(
-    QuestItem(R.drawable.quest_walk, "Walk for 10 minutes", QuestStatus.COMPLETED, "100%"),
-    QuestItem(R.drawable.quest_walk, "Walk for 1 mile", QuestStatus.IN_PROGRESS, "38%"),
-    QuestItem(R.drawable.notif_smiley, "Send a heart to another virtual garden", QuestStatus.NOT_STARTED),
-    QuestItem(R.drawable.quest_quote, "Read the inspirational quote of the day", QuestStatus.NOT_STARTED),
-    QuestItem(R.drawable.quest_book, "Journal your thoughts and feelings", QuestStatus.NOT_STARTED)
-)
-
 /**
  * "Quests" screen - matches the real Figma "Quests" frame. Full-screen like Notifications/
  * Visit Gardens, with a Weather Special Quests column (fixed) and a Daily Quests column
@@ -1620,7 +1650,11 @@ private val dailyQuests = listOf(
  * 32sp treatment than the other screens' 26sp headers, so that's kept as given.
  */
 @Composable
-private fun QuestsScreen(onClose: () -> Unit) {
+private fun QuestsScreen(
+    weatherQuests: List<Quest>,
+    dailyQuests: List<Quest>,
+    onClose: () -> Unit
+) {
     Box(
         modifier = Modifier
             .fillMaxSize()
@@ -1663,7 +1697,7 @@ private fun QuestsScreen(onClose: () -> Unit) {
                     modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()),
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    weatherSpecialQuests.forEach { QuestCard(it) }
+                    weatherQuests.forEach { QuestCard(it) }
                 }
             }
 
@@ -1701,7 +1735,7 @@ private fun QuestsScreen(onClose: () -> Unit) {
  * fill for a plain black-bordered outline instead.
  */
 @Composable
-private fun QuestCard(item: QuestItem) {
+private fun QuestCard(item: Quest) {
     val isCompleted = item.status == QuestStatus.COMPLETED
     Row(
         modifier = Modifier
@@ -1719,7 +1753,7 @@ private fun QuestCard(item: QuestItem) {
         verticalAlignment = Alignment.CenterVertically
     ) {
         Image(
-            painter = painterResource(item.iconRes),
+            painter = painterResource(drawableFor(item.iconKey)),
             contentDescription = null,
             modifier = Modifier.size(58.dp)
         )
@@ -1781,23 +1815,7 @@ private fun QuestCard(item: QuestItem) {
 
 /** Which screen a garden visit was launched from, so the Leave button can return there. */
 /** One selectable option on the Add Decoration / Add Plant screens, with how many are owned. */
-private data class AddItemOption(val iconRes: Int, val label: String, val owned: Int)
-
-// Left-to-right order matches the real Figma "Add Decoration" frame.
-private val decorationOptions = listOf(
-    AddItemOption(R.drawable.decor_fence, "Fence", 2),
-    AddItemOption(R.drawable.decor_watering_can, "Watering Can", 1),
-    AddItemOption(R.drawable.decor_shovel, "Shovel", 1),
-    AddItemOption(R.drawable.decor_paved_path, "Path", 5)
-)
-
-// Left-to-right order matches the real Figma "Add Plant" frame.
-private val plantOptions = listOf(
-    AddItemOption(R.drawable.plant_sunflower, "Sunflower", 1),
-    AddItemOption(R.drawable.plant_tulip, "Tulip", 1),
-    AddItemOption(R.drawable.plant_daisy, "Daisy", 1),
-    AddItemOption(R.drawable.plant_carrot, "Carrot", 2)
-)
+private data class AddItemOption(val key: String, val iconRes: Int, val label: String, val owned: Int)
 
 /**
  * Shared implementation of the "Add Decoration" and "Add Plant" screens - matches the real
@@ -1814,6 +1832,7 @@ private fun AddItemScreen(
     items: List<AddItemOption>,
     confirmLabel: String,
     badgeBorderColor: Color,
+    onConfirm: (AddItemOption) -> Unit,
     onClose: () -> Unit
 ) {
     var selectedIndex by remember { mutableStateOf<Int?>(null) }
@@ -1879,7 +1898,16 @@ private fun AddItemScreen(
                     .clip(RoundedCornerShape(10.dp))
                     .background(if (canConfirm) ButtonRed else PriceBorderGray)
                     .border(2.dp, Color.Black, RoundedCornerShape(10.dp))
-                    .then(if (canConfirm) Modifier.clickable(onClick = onClose) else Modifier)
+                    .then(
+                        if (canConfirm) {
+                            Modifier.clickable {
+                                selectedIndex?.let { items.getOrNull(it) }?.let(onConfirm)
+                                onClose()
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
                     .padding(horizontal = 28.dp, vertical = 12.dp)
             ) {
                 Text(
@@ -2206,7 +2234,7 @@ private fun StickerTile(sticker: MessageSticker, selectedIconRes: Int?, onSelect
  * `viewerReady` is false for entries whose full viewer design hasn't been specced yet - they
  * still render in the list, just without a working tap-through until that CSS arrives.
  */
-private data class JournalEntry(
+internal data class JournalEntry(
     val title: String,
     val caption: String,
     val pageNumber: Int,
@@ -2229,70 +2257,10 @@ private data class JournalEntry(
  * through, plus the color and width it was drawn with. A list of these is enough to redraw a
  * saved drawing entry later in the read-only viewer, the same way it looked while being drawn.
  */
-private data class DrawnStroke(
+internal data class DrawnStroke(
     val points: List<Offset>,
     val color: Color,
     val strokeWidthDp: Dp
-)
-
-// Mutable so that saving a new entry from the editor can actually append to this list and have
-// it show up back on the Journal screen - a plain `listOf` would just reset on every
-// recomposition. `mutableStateListOf` makes additions observable by any composable reading it.
-private val journalEntries = mutableStateListOf(
-    JournalEntry(
-        title = "Fox!",
-        caption = "Yesterday, art",
-        pageNumber = 4,
-        preview = null,
-        type = EntryEditorMode.DRAWING,
-        date = "10/3/25",
-        prompt = "Today's Prompt: Draw your favorite animal!",
-        fullBody = "",
-        artRes = R.drawable.entry_drawing_fox
-    ),
-    JournalEntry(
-        title = "My Parents",
-        caption = "Yesterday, writing",
-        pageNumber = 3,
-        preview = "I'm really grateful for...",
-        type = EntryEditorMode.WRITING,
-        date = "10/3/25",
-        prompt = "Today's Prompt: What are you most grateful for?",
-        fullBody = "I'm really grateful for my parents today. They've always worked so hard to " +
-            "give me opportunities, even when they never had the same ones themselves. I " +
-            "sometimes take that for granted, but lately I've been noticing all the quiet " +
-            "things they do — like leaving food for me when they know I'm studying late, or " +
-            "pretending not to worry even when I can tell they're exhausted. It makes me " +
-            "realize how much love can be shown in small, unspoken ways. I'm also thankful " +
-            "for how our relationship has grown. We still argue sometimes, but I think we " +
-            "understand each other more now than before. I'm learning to see them not just " +
-            "as parents, but as people with their own worries and dreams. That thought alone " +
-            "makes me want to try harder — not because they expect it, but because I want to " +
-            "make them proud.",
-        photoRes = R.drawable.entry_photo_my_parents
-    ),
-    JournalEntry(
-        title = "Anger",
-        caption = "Yesterday, writing",
-        pageNumber = 2,
-        preview = "I feel frustrated to...",
-        type = EntryEditorMode.WRITING,
-        date = "10/1/25",
-        prompt = "Today's Prompt: What made you feel frustrated today?",
-        fullBody = "I feel frustrated to...",
-        viewerReady = false
-    ),
-    JournalEntry(
-        title = "First Journal",
-        caption = "Yesterday, writing",
-        pageNumber = 1,
-        preview = "I've never used this....",
-        type = EntryEditorMode.WRITING,
-        date = "9/28/25",
-        prompt = "Today's Prompt: Write about how you're feeling right now.",
-        fullBody = "I've never used this....",
-        viewerReady = false
-    )
 )
 
 /**
@@ -2302,7 +2270,11 @@ private val journalEntries = mutableStateListOf(
  * stack of recent-entry cards, and a floating red "CREATE NEW" button pinned bottom-right.
  */
 @Composable
-private fun JournalScreen(onClose: () -> Unit) {
+private fun JournalScreen(
+    entries: List<JournalEntry>,
+    onSave: (JournalEntry) -> Unit,
+    onClose: () -> Unit
+) {
     // The rest of the app is locked to landscape (see AndroidManifest), but this one screen
     // is authored upright in Figma. Force portrait for as long as this screen is on-screen,
     // then restore landscape when it closes - the user rotates their phone to use it.
@@ -2323,12 +2295,7 @@ private fun JournalScreen(onClose: () -> Unit) {
         JournalEntryEditorScreen(
             mode = currentEditorMode,
             onClose = { entryEditorMode = null },
-            onSave = { newEntry ->
-                // Newest entry goes on top (matches the seed data, which is ordered highest
-                // pageNumber first) and gets the next page number up from whatever's highest.
-                val nextPageNumber = (journalEntries.maxOfOrNull { it.pageNumber } ?: 0) + 1
-                journalEntries.add(0, newEntry.copy(pageNumber = nextPageNumber))
-            }
+            onSave = onSave
         )
         return
     }
@@ -2336,7 +2303,7 @@ private fun JournalScreen(onClose: () -> Unit) {
     val currentViewingIndex = viewingEntryIndex
     if (currentViewingIndex != null) {
         JournalEntryViewerScreen(
-            entries = journalEntries,
+            entries = entries,
             initialIndex = currentViewingIndex,
             onClose = { viewingEntryIndex = null }
         )
@@ -2397,7 +2364,7 @@ private fun JournalScreen(onClose: () -> Unit) {
                     .padding(horizontal = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                journalEntries.forEachIndexed { index, entry ->
+                entries.forEachIndexed { index, entry ->
                     JournalEntryCard(
                         entry = entry,
                         onClick = { if (entry.viewerReady) viewingEntryIndex = index }
@@ -2585,7 +2552,7 @@ private fun CreateEntryOption(iconRes: Int, label: String, onClick: () -> Unit) 
 }
 
 /** Which kind of new journal entry is being created - drives the editor screen's content. */
-private enum class EntryEditorMode { DRAWING, WRITING }
+internal enum class EntryEditorMode { DRAWING, WRITING }
 
 /**
  * Shared "new entry" editor screen for both the real Figma "Drawing" and "Writing" frames -
